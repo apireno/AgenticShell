@@ -12,6 +12,7 @@ export default function Terminal() {
   const lineBuffer = useRef("");
   const historyRef = useRef<string[]>([]);
   const historyIndex = useRef(-1);
+  const completionPending = useRef(false);
 
   const writePrompt = useCallback(() => {
     xtermRef.current?.write(PROMPT);
@@ -68,17 +69,17 @@ export default function Terminal() {
           term.write((msg.output ?? msg.error) + "\r\n");
         }
         writePrompt();
+      } else if (msg.type === "COMPLETE_RESPONSE") {
+        handleCompletionResponse(term, msg.matches, msg.partial);
       }
     });
 
     // Tell the background we're ready
     port.postMessage({ type: "READY" });
 
-    // Handle user input
-    term.onKey(({ key, domEvent }) => {
-      const code = domEvent.keyCode;
-
-      if (code === 13) {
+    // Use onData for ALL input — handles both typing and paste
+    term.onData((data) => {
+      if (data === "\r") {
         // Enter
         term.write("\r\n");
         const command = lineBuffer.current.trim();
@@ -90,19 +91,19 @@ export default function Terminal() {
           writePrompt();
         }
         lineBuffer.current = "";
-      } else if (code === 8) {
-        // Backspace
+      } else if (data === "\x7f" || data === "\b") {
+        // Backspace (0x7f on Mac, 0x08 on some terminals)
         if (lineBuffer.current.length > 0) {
           lineBuffer.current = lineBuffer.current.slice(0, -1);
           term.write("\b \b");
         }
-      } else if (code === 38) {
+      } else if (data === "\x1b[A") {
         // Arrow Up - history
         if (historyIndex.current > 0) {
           historyIndex.current--;
           replaceLineWith(term, historyRef.current[historyIndex.current]);
         }
-      } else if (code === 40) {
+      } else if (data === "\x1b[B") {
         // Arrow Down - history
         if (historyIndex.current < historyRef.current.length - 1) {
           historyIndex.current++;
@@ -111,22 +112,26 @@ export default function Terminal() {
           historyIndex.current = historyRef.current.length;
           replaceLineWith(term, "");
         }
-      } else if (code === 9) {
-        // Tab - basic autocomplete hint
-        // Could be extended with actual autocomplete
-      } else if (domEvent.ctrlKey && code === 67) {
+      } else if (data === "\x03") {
         // Ctrl+C
         lineBuffer.current = "";
         term.write("^C\r\n");
         writePrompt();
-      } else if (domEvent.ctrlKey && code === 76) {
+      } else if (data === "\x0c") {
         // Ctrl+L — clear
         term.clear();
         writePrompt();
-      } else if (key.length === 1 && !domEvent.ctrlKey && !domEvent.altKey && !domEvent.metaKey) {
-        // Regular printable character
-        lineBuffer.current += key;
-        term.write(key);
+      } else if (data === "\t") {
+        // Tab — trigger completion
+        handleTab(port);
+      } else if (!data.startsWith("\x1b")) {
+        // Regular characters or pasted text — append to buffer and echo
+        // Filter out control characters but allow multi-char paste
+        const clean = data.replace(/[\x00-\x08\x0e-\x1f]/g, "");
+        if (clean) {
+          lineBuffer.current += clean;
+          term.write(clean);
+        }
       }
     });
 
@@ -147,6 +152,92 @@ export default function Terminal() {
     term.write("\b".repeat(clearLen) + " ".repeat(clearLen) + "\b".repeat(clearLen));
     lineBuffer.current = newLine;
     term.write(newLine);
+  }
+
+  function handleTab(port: chrome.runtime.Port) {
+    if (completionPending.current) return;
+
+    const line = lineBuffer.current;
+    const parts = line.split(/\s+/);
+
+    let command = "";
+    let partial = "";
+
+    if (parts.length <= 1) {
+      // Completing the command name itself
+      partial = parts[0] || "";
+      command = partial;
+    } else {
+      // Completing an argument — use the last word as partial
+      command = parts[0];
+      partial = parts[parts.length - 1] || "";
+    }
+
+    completionPending.current = true;
+    port.postMessage({ type: "COMPLETE", partial, command });
+  }
+
+  function handleCompletionResponse(
+    term: XTerminal,
+    matches: string[],
+    partial: string
+  ) {
+    completionPending.current = false;
+
+    if (matches.length === 0) return;
+
+    const line = lineBuffer.current;
+    const parts = line.split(/\s+/);
+    const isCommandCompletion = parts.length <= 1;
+
+    if (matches.length === 1) {
+      // Single match — auto-complete
+      const completion = matches[0];
+      const suffix = completion.slice(partial.length);
+
+      if (isCommandCompletion) {
+        // Replace the whole partial with the match + trailing space
+        lineBuffer.current = completion + " ";
+        term.write(suffix + " ");
+      } else {
+        // Replace just the last word
+        lineBuffer.current = parts.slice(0, -1).join(" ") + " " + completion;
+        term.write(suffix);
+      }
+    } else {
+      // Multiple matches — find common prefix for partial completion
+      const commonPrefix = findCommonPrefix(matches);
+      const extraChars = commonPrefix.slice(partial.length);
+
+      if (extraChars.length > 0) {
+        // Can extend the partial with common prefix
+        if (isCommandCompletion) {
+          lineBuffer.current = commonPrefix;
+        } else {
+          lineBuffer.current = parts.slice(0, -1).join(" ") + " " + commonPrefix;
+        }
+        term.write(extraChars);
+      }
+
+      // Show all options below
+      term.write("\r\n");
+      const display = matches.map((m) => `  ${m}`).join("\r\n");
+      term.write(display + "\r\n");
+      writePrompt();
+      term.write(lineBuffer.current);
+    }
+  }
+
+  function findCommonPrefix(strings: string[]): string {
+    if (strings.length === 0) return "";
+    let prefix = strings[0];
+    for (let i = 1; i < strings.length; i++) {
+      while (!strings[i].startsWith(prefix)) {
+        prefix = prefix.slice(0, -1);
+        if (!prefix) return "";
+      }
+    }
+    return prefix;
   }
 
   return (

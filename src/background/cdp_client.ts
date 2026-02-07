@@ -237,4 +237,81 @@ export class CDPClient {
     );
     return result.value;
   }
+
+  /**
+   * Get the frame tree to discover iframes.
+   */
+  async getFrameTree(): Promise<FrameTreeNode> {
+    const result = await this.send<{ frameTree: FrameTreeNode }>("Page.getFrameTree");
+    return result.frameTree;
+  }
+
+  /**
+   * Fetch the full AX tree for a specific frame.
+   */
+  async getFrameAXTree(frameId: string): Promise<AXNode[]> {
+    try {
+      const result = await this.send<{ nodes: AXNode[] }>(
+        "Accessibility.getFullAXTree",
+        { frameId }
+      );
+      return result.nodes;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Fetch AX trees for all frames (main + iframes) and merge them.
+   * Iframe roots are injected as children of the node that owns them.
+   */
+  async getAllFrameAXTrees(): Promise<AXNode[]> {
+    // Get main frame tree first
+    const mainNodes = await this.getFullAXTree();
+
+    try {
+      await this.send("Page.enable");
+      const frameTree = await this.getFrameTree();
+      const childFrames = collectChildFrames(frameTree);
+
+      if (childFrames.length === 0) return mainNodes;
+
+      // Fetch each iframe's AX tree and merge
+      for (const frame of childFrames) {
+        const frameNodes = await this.getFrameAXTree(frame.id);
+        if (frameNodes.length > 0) {
+          // Prefix iframe node IDs to avoid collisions with main frame
+          const prefix = `frame_${frame.id}_`;
+          for (const node of frameNodes) {
+            node.nodeId = prefix + node.nodeId;
+            if (node.childIds) {
+              node.childIds = node.childIds.map((id) => prefix + id);
+            }
+          }
+          mainNodes.push(...frameNodes);
+        }
+      }
+
+      return mainNodes;
+    } catch {
+      // Page.enable or getFrameTree may fail on some pages
+      return mainNodes;
+    }
+  }
+}
+
+interface FrameTreeNode {
+  frame: { id: string; url: string; name?: string };
+  childFrames?: FrameTreeNode[];
+}
+
+function collectChildFrames(tree: FrameTreeNode): Array<{ id: string; url: string; name?: string }> {
+  const frames: Array<{ id: string; url: string; name?: string }> = [];
+  if (tree.childFrames) {
+    for (const child of tree.childFrames) {
+      frames.push(child.frame);
+      frames.push(...collectChildFrames(child));
+    }
+  }
+  return frames;
 }

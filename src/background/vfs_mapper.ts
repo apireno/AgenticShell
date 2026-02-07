@@ -88,13 +88,12 @@ export function isContainerNode(node: AXNode): boolean {
 
 /**
  * Build a map of nodeId -> AXNode for fast lookup.
+ * Includes ALL nodes (even ignored ones) so we can traverse through them.
  */
 export function buildNodeMap(axNodes: AXNode[]): Map<string, AXNode> {
   const map = new Map<string, AXNode>();
   for (const node of axNodes) {
-    if (!node.ignored) {
-      map.set(node.nodeId, node);
-    }
+    map.set(node.nodeId, node);
   }
   return map;
 }
@@ -116,46 +115,64 @@ export function findRootNode(nodeMap: Map<string, AXNode>): AXNode | null {
 }
 
 /**
+ * Determine if a node should be "skipped through" — i.e., we show
+ * its children in place of it. This handles ignored nodes, "none" roles,
+ * and unnamed generic wrappers that are just structural noise.
+ */
+function shouldFlattenNode(node: AXNode): boolean {
+  if (node.ignored) return true;
+
+  const role = node.role?.value ?? "";
+  if (role === "none" || role === "Ignored") return true;
+
+  // Generic nodes with no accessible name are structural wrappers
+  const name = node.name?.value ?? "";
+  if (role === "generic" && !name) return true;
+
+  return false;
+}
+
+/**
  * Get the children of a node as VFSNodes.
- * Skips ignored nodes and flattens "useless" wrappers (generic nodes with no name).
+ * Recursively flattens through ignored nodes and nameless generic wrappers
+ * to surface the real, meaningful content.
  */
 export function getChildVFSNodes(
   parentId: string,
   nodeMap: Map<string, AXNode>
 ): VFSNode[] {
-  const parent = nodeMap.get(parentId);
-  if (!parent || !parent.childIds) return [];
-
   const results: VFSNode[] = [];
   const seenNames = new Map<string, number>();
+  const visited = new Set<string>();
+
+  collectChildren(parentId, nodeMap, results, seenNames, visited);
+
+  return results;
+}
+
+function collectChildren(
+  parentId: string,
+  nodeMap: Map<string, AXNode>,
+  results: VFSNode[],
+  seenNames: Map<string, number>,
+  visited: Set<string>
+): void {
+  if (visited.has(parentId)) return;
+  visited.add(parentId);
+
+  const parent = nodeMap.get(parentId);
+  if (!parent || !parent.childIds) return;
 
   for (const childId of parent.childIds) {
     const child = nodeMap.get(childId);
-    if (!child || child.ignored) continue;
+    if (!child) continue;
 
-    const role = child.role?.value ?? "";
-    const name = child.name?.value ?? "";
-
-    // Skip "none" role nodes or completely empty ignored nodes
-    if (role === "none" || role === "Ignored") continue;
-
-    // Flatten useless generic wrappers: if a generic node has no name
-    // and only one child, skip it and show its child instead
-    if (
-      role === "generic" &&
-      !name &&
-      child.childIds &&
-      child.childIds.length === 1
-    ) {
-      const grandchild = nodeMap.get(child.childIds[0]);
-      if (grandchild && !grandchild.ignored) {
-        const vfsNode = axNodeToVFSNode(grandchild);
-        if (vfsNode) {
-          deduplicateName(vfsNode, seenNames);
-          results.push(vfsNode);
-        }
-        continue;
+    // If this node is a meaningless wrapper, recurse into its children instead
+    if (shouldFlattenNode(child)) {
+      if (child.childIds && child.childIds.length > 0) {
+        collectChildren(childId, nodeMap, results, seenNames, visited);
       }
+      continue;
     }
 
     const vfsNode = axNodeToVFSNode(child);
@@ -164,8 +181,6 @@ export function getChildVFSNodes(
       results.push(vfsNode);
     }
   }
-
-  return results;
 }
 
 /**

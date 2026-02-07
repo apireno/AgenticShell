@@ -19,7 +19,19 @@ export interface ReadyMessage {
   type: "READY";
 }
 
-export type ShellMessage = StdinMessage | StdoutMessage | StderrMessage | ReadyMessage;
+export interface CompleteMessage {
+  type: "COMPLETE";
+  partial: string;   // The partial name to complete
+  command: string;   // The command context (e.g. "cd", "cat")
+}
+
+export interface CompleteResponseMessage {
+  type: "COMPLETE_RESPONSE";
+  matches: string[];
+  partial: string;
+}
+
+export type ShellMessage = StdinMessage | StdoutMessage | StderrMessage | ReadyMessage | CompleteMessage | CompleteResponseMessage;
 
 // ---- Shell State ----
 
@@ -66,6 +78,7 @@ export const CONTAINER_ROLES = new Set([
   "group",
   "navigation",
   "form",
+  "search",
   "section",
   "main",
   "complementary",
@@ -89,9 +102,17 @@ export const CONTAINER_ROLES = new Set([
   "grid",
   "document",
   "application",
+  "figure",
+  "feed",
+  "log",
+  "status",
+  "timer",
+  "alertdialog",
   "generic",
   "WebArea",
   "RootWebArea",
+  "Iframe",
+  "IframePresentational",
 ]);
 
 // Interactive roles — these become "files" you can click/interact with
