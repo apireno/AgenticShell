@@ -319,6 +319,8 @@ Options:
 | `env` | Show environment variables |
 | `export K=V` | Set an environment variable |
 | `debug [sub]` | Inspect raw AX tree (`stats`, `raw`, `node <id>`) |
+| `connect <token>` | Connect to an MCP server via WebSocket bridge |
+| `disconnect` | Disconnect from the MCP server, clear token |
 | `clear` | Clear the terminal |
 
 ## How the Filesystem Mapping Works
@@ -367,28 +369,41 @@ AgentShell discovers iframes via `Page.getFrameTree` and fetches each iframe's A
 ## Architecture
 
 ```
-┌─────────────────────┐     chrome.runtime.connect()     ┌─────────────────────┐
-│   Side Panel (UI)   │ ◄──────────────────────────────► │  Background Worker  │
-│                     │    STDIN/STDOUT/COMPLETE          │   (Shell Kernel)    │
-│  React + Xterm.js   │    messages                       │                     │
-│                     │                                   │  Command parser     │
-│  - Paste support    │                                   │  Shell state (CWD)  │
-│  - Tab completion   │                                   │  VFS mapper         │
-│  - Command history  │                                   │  CDP client         │
-│  - Tokyo Night      │                                   │  DOM change detect  │
-└─────────────────────┘                                   └────────┬────────────┘
-                                                                   │
-                                                          chrome.debugger
-                                                          (CDP 1.3)
-                                                                   │
-                                                          ┌────────▼────────────┐
-                                                          │   Active Tab        │
-                                                          │   Accessibility     │
-                                                          │   Tree + iframes    │
-                                                          │                     │
-                                                          │   DOM events ──────►│
-                                                          │   (auto-refresh)    │
-                                                          └─────────────────────┘
+┌────────────────────┐                                     ┌─────────────────────┐
+│  Claude Desktop /  │  MCP protocol (stdio)               │  Side Panel (UI)    │
+│  MCP Client        │────────────────────┐                │                     │
+└────────────────────┘                    │                │  React + Xterm.js   │
+                                          ▼                │  - Paste support    │
+                               ┌─────────────────────┐    │  - Tab completion   │
+                               │  MCP Server          │    │  - Command history  │
+                               │  (mcp-server/)       │    └─────────┬───────────┘
+                               │                      │              │
+                               │  Security layer:     │     chrome.runtime
+                               │  - Auth token        │     .connect()
+                               │  - Command tiers     │              │
+                               │  - Domain allowlist  │    ┌─────────▼───────────┐
+                               │  - Audit log         │    │  Background Worker  │
+                               │  - Confirmation      │    │   (Shell Kernel)    │
+                               └──────────┬───────────┘    │                     │
+                                          │                │  Command parser     │
+                               WebSocket (localhost:9876)   │  Shell state (CWD)  │
+                               + auth token                │  VFS mapper         │
+                                          │                │  CDP client         │
+                                          └───────────────►│  DOM change detect  │
+                                                           │  WebSocket bridge   │
+                                                           └─────────┬───────────┘
+                                                                     │
+                                                            chrome.debugger
+                                                            (CDP 1.3)
+                                                                     │
+                                                           ┌─────────▼───────────┐
+                                                           │   Active Tab        │
+                                                           │   Accessibility     │
+                                                           │   Tree + iframes    │
+                                                           │                     │
+                                                           │   DOM events ──────►│
+                                                           │   (auto-refresh)    │
+                                                           └─────────────────────┘
 ```
 
 The extension follows a **Thin Client / Fat Host** model. The side panel is a dumb terminal — it captures keystrokes, handles paste, and renders ANSI-colored text. All logic lives in the background service worker: command parsing, AX tree traversal, filesystem mapping, CDP interaction, and DOM change detection.
@@ -398,7 +413,7 @@ The extension follows a **Thin Client / Fat Host** model. The side panel is a du
 ```
 src/
   background/
-    index.ts        # Shell kernel — commands, state, message router, auto-refresh
+    index.ts        # Shell kernel — commands, state, message router, auto-refresh, WS bridge
     cdp_client.ts   # Promise-wrapped chrome.debugger API + iframe discovery
     vfs_mapper.ts   # Accessibility Tree → virtual filesystem mapping
   sidepanel/
@@ -409,6 +424,10 @@ src/
     types.ts        # Message types, AXNode interfaces, role constants
 public/
   manifest.json     # Chrome Manifest V3
+mcp-server/
+  index.ts          # MCP server — WebSocket bridge, security hardening, audit log
+  package.json      # MCP server dependencies
+  tsconfig.json     # MCP server TypeScript config
 ```
 
 ## Tech Stack
@@ -434,27 +453,166 @@ npm run typecheck
 
 After building, reload the extension on `chrome://extensions/` and reopen the side panel to pick up changes.
 
-## Connecting AI Agents
+## Connecting Claude Desktop (MCP Server)
 
-AgentShell's command/response model (`STDIN` in, `STDOUT` out) is designed to be driven programmatically. To connect an LLM like Claude or GPT:
+AgentShell includes a hardened MCP server that lets Claude Desktop (or any MCP-compatible client) control the browser through AgentShell commands.
 
-| Approach | Best For | How It Works |
-|----------|----------|-------------|
-| **MCP Server** | Claude Desktop | Node.js process exposes AgentShell commands as MCP tools, bridges to extension via WebSocket |
-| **HTTP API** | Any LLM with tool use | Local HTTP server relays commands to the extension, any function-calling LLM can use it |
-| **Native Messaging** | Single-machine setups | Chrome's `chrome.runtime.connectNative()` pipes stdin/stdout to a registered host binary |
-
-The bridge architecture:
+### Architecture
 
 ```
-LLM (Claude / GPT / etc.)
-  ↓ tool calls
-MCP Server or HTTP API
-  ↓ WebSocket or Native Messaging
-Chrome Extension Background Service Worker
+Claude Desktop
+  ↓ MCP protocol (stdio)
+mcp-server/index.ts (Node.js)
+  ↕ WebSocket (localhost:9876) + auth token
+Chrome Extension background.js
   ↓ CDP
 Browser DOM
 ```
+
+### Setup
+
+**1. Install MCP server dependencies:**
+
+```bash
+cd mcp-server
+npm install
+```
+
+**2. Start the MCP server:**
+
+```bash
+npx tsx index.ts
+```
+
+The server prints an auth token on startup:
+
+```
+[AgentShell MCP] WebSocket server listening on ws://127.0.0.1:9876
+[AgentShell MCP] Auth token: a1b2c3d4e5f6...
+[AgentShell MCP] Security: write=OFF, sensitive=OFF, confirm=ON
+```
+
+**3. Connect the extension:**
+
+In the AgentShell terminal, run:
+
+```bash
+agent@shell:$ connect a1b2c3d4e5f6...
+```
+
+You'll see a security warning — read it carefully. The connection persists across service worker restarts.
+
+**4. Configure Claude Desktop:**
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "agentshell": {
+      "command": "npx",
+      "args": ["tsx", "/path/to/AgenticShell/mcp-server/index.ts", "--allow-write"],
+      "env": {}
+    }
+  }
+}
+```
+
+Restart Claude Desktop. AgentShell tools will appear.
+
+**5. Test it:**
+
+Ask Claude: *"Attach to the active tab and tell me what's on the page."*
+
+### Security
+
+The MCP server is hardened with multiple layers of security. **By default, it's read-only** — Claude can browse but not click or type.
+
+#### Command Tiers
+
+| Tier | Commands | Default | Enable With |
+|------|----------|---------|-------------|
+| **Read** | `ls`, `cd`, `pwd`, `cat`, `grep`, `find`, `tree`, `refresh`, `attach` | Enabled | *(always on)* |
+| **Write** | `click`, `focus`, `type` | **Disabled** | `--allow-write` |
+| **Sensitive** | `whoami` (exposes cookies) | **Disabled** | `--allow-sensitive` |
+
+#### Security Flags
+
+| Flag | Description |
+|------|-------------|
+| `--allow-write` | Enable click/focus/type commands |
+| `--allow-sensitive` | Enable whoami (cookie access) |
+| `--allow-all` | Shorthand for both |
+| `--no-confirm` | Skip user confirmation for write actions (use with caution) |
+| `--domains example.com,app.example.com` | Restrict commands to specific domains |
+| `--expose-cookies` | Show full cookie values (default: redacted) |
+| `--port N` | WebSocket port (default: 9876) |
+| `--log-file PATH` | Audit log file (default: audit.log) |
+
+#### User Confirmation
+
+When write commands are enabled, the MCP server prompts in its terminal before executing:
+
+```
+[AgentShell] Claude wants to: click submit_btn
+Allow? (y/n):
+```
+
+This blocks until you type `y` or `n` (60-second timeout → deny). Disable with `--no-confirm` for trusted environments.
+
+#### Auth Token
+
+- A random token is generated on every MCP server restart
+- The extension must present this token via `connect <token>` before the bridge works
+- WebSocket connections without a valid token are rejected
+- Token is stored in `chrome.storage.local` — survives service worker restarts but you must re-run `connect` if the MCP server restarts
+
+#### Domain Allowlist
+
+With `--domains`, commands are only executed when the attached tab's URL matches:
+
+```bash
+npx tsx index.ts --allow-write --domains "github.com,docs.google.com"
+```
+
+#### Audit Log
+
+Every command is logged with timestamps to `audit.log` (or `--log-file`):
+
+```
+[2026-02-07T12:00:00.000Z] EXECUTE: ls -l
+[2026-02-07T12:00:01.000Z] RESULT: 12 items
+[2026-02-07T12:00:05.000Z] [WRITE] EXECUTE: click submit_btn
+[2026-02-07T12:00:05.500Z] [WRITE] RESULT: ✓ Clicked: submit_btn (button)
+```
+
+#### Disconnecting
+
+Run `disconnect` in the AgentShell terminal at any time to immediately close the bridge and clear the stored token:
+
+```bash
+agent@shell:$ disconnect
+✓ Disconnected from MCP server. Token cleared.
+```
+
+### MCP Tools Reference
+
+| MCP Tool | Maps To | Tier |
+|----------|---------|------|
+| `agentshell_attach` | `attach` | Read |
+| `agentshell_ls` | `ls [options]` | Read |
+| `agentshell_cd` | `cd <path>` | Read |
+| `agentshell_pwd` | `pwd` | Read |
+| `agentshell_cat` | `cat <name>` | Read |
+| `agentshell_find` | `find [pattern] [--type ROLE] [-n N]` | Read |
+| `agentshell_grep` | `grep [-r] [-n N] <pattern>` | Read |
+| `agentshell_tree` | `tree [depth]` | Read |
+| `agentshell_refresh` | `refresh` | Read |
+| `agentshell_click` | `click <name>` | Write |
+| `agentshell_focus` | `focus <name>` | Write |
+| `agentshell_type` | `type <text>` | Write |
+| `agentshell_whoami` | `whoami` | Sensitive |
+| `agentshell_execute` | *(any command)* | Varies |
 
 ## How This Project Was Built
 

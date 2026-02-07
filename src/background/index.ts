@@ -27,6 +27,142 @@ const state: ShellState = {
 let nodeMap: Map<string, AXNode> = new Map();
 let treeStale = false;
 
+// ---- WebSocket Bridge (for MCP server) ----
+// Default OFF — user must explicitly run `connect <token>` to enable
+
+let ws: WebSocket | null = null;
+let wsToken: string | null = null;
+let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let wsHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let wsPort = 9876;
+let wsConnected = false;
+let wsAllowedDomains: string[] = [];
+
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+function wsConnect(): void {
+  if (!wsToken) return;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  try {
+    ws = new WebSocket(`ws://127.0.0.1:${wsPort}?token=${wsToken}`);
+
+    ws.onopen = () => {
+      wsConnected = true;
+      console.log("[AgentShell] WebSocket connected to MCP server");
+
+      // Start heartbeat to keep MV3 service worker alive
+      if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+      wsHeartbeatTimer = setInterval(() => {
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      }, 20000);
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(typeof event.data === "string" ? event.data : "");
+
+        if (msg.type === "EXECUTE" && msg.command) {
+          // Domain allowlist check
+          if (msg.allowedDomains && msg.allowedDomains.length > 0 && state.attachedTabId) {
+            try {
+              const url = await cdp.getPageUrl();
+              const hostname = new URL(url).hostname.toLowerCase();
+              const allowed = msg.allowedDomains.some((d: string) =>
+                hostname === d || hostname.endsWith("." + d)
+              );
+              if (!allowed) {
+                ws?.send(JSON.stringify({
+                  type: "RESULT",
+                  id: msg.id,
+                  result: `Error: Domain '${hostname}' is not in the allowed list: ${msg.allowedDomains.join(", ")}`,
+                }));
+                return;
+              }
+            } catch {
+              // If we can't check the domain, proceed anyway
+            }
+          }
+
+          // Execute the command and send the result back
+          const output = await executeCommand(msg.command);
+          const cleanOutput = stripAnsi(output);
+
+          ws?.send(JSON.stringify({
+            type: "RESULT",
+            id: msg.id,
+            result: cleanOutput,
+          }));
+        }
+      } catch {
+        // Ignore malformed messages
+      }
+    };
+
+    ws.onclose = () => {
+      wsConnected = false;
+      if (wsHeartbeatTimer) {
+        clearInterval(wsHeartbeatTimer);
+        wsHeartbeatTimer = null;
+      }
+
+      // Auto-reconnect after 5s if token is still set
+      if (wsToken && !wsReconnectTimer) {
+        wsReconnectTimer = setTimeout(() => {
+          wsReconnectTimer = null;
+          wsConnect();
+        }, 5000);
+      }
+    };
+
+    ws.onerror = () => {
+      // onclose will fire after onerror
+    };
+  } catch {
+    // WebSocket constructor failed — retry later
+    if (wsToken && !wsReconnectTimer) {
+      wsReconnectTimer = setTimeout(() => {
+        wsReconnectTimer = null;
+        wsConnect();
+      }, 5000);
+    }
+  }
+}
+
+function wsDisconnect(): void {
+  wsToken = null;
+  wsConnected = false;
+
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  if (wsHeartbeatTimer) {
+    clearInterval(wsHeartbeatTimer);
+    wsHeartbeatTimer = null;
+  }
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
+
+  // Clear stored token
+  chrome.storage.local.remove("ws_token");
+}
+
+// Restore WebSocket connection on service worker restart
+chrome.storage.local.get(["ws_token", "ws_port"], (result) => {
+  if (result.ws_token) {
+    wsToken = result.ws_token;
+    wsPort = result.ws_port || 9876;
+    wsConnect();
+  }
+});
+
 // ---- CDP Event Listener for DOM / Navigation Changes ----
 
 chrome.debugger.onEvent.addListener((source, method) => {
@@ -72,10 +208,11 @@ chrome.runtime.onConnect.addListener((port) => {
 
 function formatWelcome(): string {
   return [
-    "\x1b[36m╔══════════════════════════════════════╗\x1b[0m",
-    "\x1b[36m║\x1b[0m   \x1b[1;33mAgentShell v1.0.0\x1b[0m               \x1b[36m║\x1b[0m",
-    "\x1b[36m║\x1b[0m   \x1b[37mThe DOM is your filesystem.\x1b[0m      \x1b[36m║\x1b[0m",
-    "\x1b[36m╚══════════════════════════════════════╝\x1b[0m",
+    "\x1b[36m╔══════════════════════════════════════════════════════╗\x1b[0m",
+    "\x1b[36m║\x1b[0m   \x1b[1;33mAgentShell v1.0.0\x1b[0m                                 \x1b[36m║\x1b[0m",
+    "\x1b[36m║\x1b[0m   \x1b[37mThe DOM is your filesystem.\x1b[0m                        \x1b[36m║\x1b[0m",
+    "\x1b[36m║\x1b[0m   \x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m            \x1b[36m║\x1b[0m",
+    "\x1b[36m╚══════════════════════════════════════════════════════╝\x1b[0m",
     "",
     "\x1b[90mType 'help' to see available commands.\x1b[0m",
     "\x1b[90mType 'attach' to connect to the active tab.\x1b[0m",
@@ -310,6 +447,36 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "\x1b[33mUsage:\x1b[0m clear",
   ].join("\r\n"),
+
+  connect: [
+    "\x1b[1;36mconnect\x1b[0m — Connect to an AgentShell MCP server via WebSocket",
+    "",
+    "\x1b[33mUsage:\x1b[0m connect <token>",
+    "",
+    "Establishes a WebSocket bridge to the MCP server, allowing",
+    "AI assistants like Claude Desktop to control the browser.",
+    "",
+    "\x1b[33mSetup:\x1b[0m",
+    "  1. Start the MCP server:  cd mcp-server && npx tsx index.ts",
+    "  2. Copy the auth token from the server output",
+    "  3. In AgentShell:  connect <token>",
+    "",
+    "\x1b[33mOptions:\x1b[0m",
+    "  \x1b[32m--port N\x1b[0m   Connect to a custom port (default: 9876)",
+    "",
+    "\x1b[1;31m⚠ Security Warning:\x1b[0m",
+    "  This gives the MCP server (and any connected AI) access to",
+    "  execute commands in your browser. Only connect to MCP servers",
+    "  you trust and have started yourself.",
+  ].join("\r\n"),
+
+  disconnect: [
+    "\x1b[1;36mdisconnect\x1b[0m — Disconnect from the MCP server",
+    "",
+    "\x1b[33mUsage:\x1b[0m disconnect",
+    "",
+    "Closes the WebSocket bridge and clears the stored auth token.",
+  ].join("\r\n"),
 };
 
 // ---- Arg Parsing Utility ----
@@ -402,6 +569,10 @@ async function executeCommand(raw: string): Promise<string> {
         return await handleRefresh();
       case "debug":
         return await handleDebug(args);
+      case "connect":
+        return handleConnect(args);
+      case "disconnect":
+        return handleDisconnect();
       case "clear":
         return "\x1b[2J\x1b[H";
       default:
@@ -473,7 +644,13 @@ function handleHelp(): string {
     "  \x1b[32mdebug\x1b[0m           Inspect raw AX tree data",
     "  \x1b[32mclear\x1b[0m           Clear the terminal",
     "",
+    "\x1b[1;33mMCP Bridge:\x1b[0m",
+    "  \x1b[32mconnect <token>\x1b[0m Connect to an MCP server (WebSocket)",
+    "  \x1b[32mdisconnect\x1b[0m      Disconnect from the MCP server",
+    "",
     "\x1b[90mType prefixes: [d]=directory [x]=interactive [-]=static\x1b[0m",
+    "",
+    "\x1b[90mhttps://github.com/apireno/AgenticShell\x1b[0m",
     "",
   ].join("\r\n");
 }
@@ -593,7 +770,7 @@ async function ensureFreshTree(): Promise<string> {
 const COMMANDS = [
   "help", "attach", "detach", "refresh", "ls", "cd", "pwd", "cat",
   "click", "focus", "type", "grep", "find", "whoami", "env", "export",
-  "tree", "debug", "clear",
+  "tree", "debug", "clear", "connect", "disconnect",
 ];
 
 function getCompletions(partial: string, command: string): string[] {
@@ -1182,6 +1359,59 @@ function handleExport(args: string[]): string {
   state.env[key] = value;
 
   return `\x1b[32m✓ ${key}=${value}\x1b[0m`;
+}
+
+// ---- connect / disconnect (MCP WebSocket bridge) ----
+
+function handleConnect(args: string[]): string {
+  const pa = parseArgs(args);
+  const port = pa.named["--port"] ? parseInt(pa.named["--port"], 10) : 9876;
+
+  if (pa.positional.length === 0) {
+    if (wsConnected) {
+      return `\x1b[32mConnected\x1b[0m to MCP server on port ${wsPort}.\r\nRun \x1b[33mdisconnect\x1b[0m to close.`;
+    }
+    if (wsToken) {
+      return `\x1b[33mConnecting\x1b[0m to MCP server on port ${wsPort}... (waiting for server)\r\nRun \x1b[33mdisconnect\x1b[0m to cancel.`;
+    }
+    return "\x1b[31mUsage: connect <token> (see connect --help)\x1b[0m";
+  }
+
+  const token = pa.positional[0];
+
+  // Store token and port for reconnection on service worker restart
+  wsToken = token;
+  wsPort = port;
+  chrome.storage.local.set({ ws_token: token, ws_port: port });
+
+  // Initiate connection
+  wsConnect();
+
+  return [
+    "\x1b[1;31m┌─────────────────────────────────────────────────────────┐\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  \x1b[1;33m⚠  SECURITY WARNING\x1b[0m                                    \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m                                                         \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  You are granting an external process (MCP server)      \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  the ability to execute commands in your browser.       \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m                                                         \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  \x1b[37m• Only connect to MCP servers you started yourself\x1b[0m    \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  \x1b[37m• The MCP server controls what commands are allowed\x1b[0m   \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  \x1b[37m• Use --allow-write on the server to enable clicks\x1b[0m   \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m│\x1b[0m  \x1b[37m• Run 'disconnect' to stop at any time\x1b[0m               \x1b[1;31m│\x1b[0m",
+    "\x1b[1;31m└─────────────────────────────────────────────────────────┘\x1b[0m",
+    "",
+    `\x1b[32m✓ Connecting to MCP server on ws://127.0.0.1:${port}\x1b[0m`,
+    "",
+  ].join("\r\n");
+}
+
+function handleDisconnect(): string {
+  if (!wsToken && !wsConnected) {
+    return "\x1b[33mNot connected to any MCP server.\x1b[0m";
+  }
+
+  wsDisconnect();
+  return "\x1b[32m✓ Disconnected from MCP server. Token cleared.\x1b[0m";
 }
 
 // ---- debug ----

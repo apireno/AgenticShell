@@ -11,6 +11,7 @@
     "identity",
     "storage"
   ],
+  "minimum_chrome_version": "116",
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
@@ -22,5 +23,6 @@
   "action": {
     "default_title": "AgentShell"
   },
+  "homepage_url": "https://github.com/apireno/AgenticShell",
   "icons": {}
 }
