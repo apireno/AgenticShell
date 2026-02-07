@@ -1,239 +1,304 @@
-This is the **Master Technical Specification** for "AgentShell," the Chrome Extension that turns the DOM into a filesystem.
+# AgentShell
 
-You can hand this document directly to a Coding Agent (like Cursor, Windsurf, or Devin) to scaffold and build the project.
+**The DOM is your filesystem.** A Chrome Extension that lets AI agents (and humans) browse the web using standard Linux commands — `ls`, `cd`, `cat`, `grep`, `click` — via a terminal in the Chrome Side Panel.
 
-### **Project: AgentShell (Chrome Extension)**
+AgentShell maps a webpage's Accessibility Tree into a virtual filesystem. Container elements become directories. Buttons, links, and inputs become files. Navigate a website the same way you'd navigate `/usr/local/bin`.
 
-**Goal:** Create a "Headless OS" for agents to browse the web using standard Linux commands (`ls`, `cd`, `cat`, `grep`) via a terminal interface in the Chrome Side Panel.
-**Core Tech Stack:** React, TypeScript, Vite, Xterm.js, Chrome DevTools Protocol (CDP).
+## Why
 
----
+AI agents that interact with websites typically rely on screenshots, pixel coordinates, or brittle CSS selectors. AgentShell takes a different approach: it exposes the browser's own Accessibility Tree as a familiar filesystem metaphor.
 
-### **1. High-Level Architecture**
+This means an agent can:
+- **Explore** a page with `ls` and `tree` instead of parsing screenshots
+- **Navigate** into sections with `cd navigation/` instead of guessing coordinates
+- **Act** on elements with `click submit_btn` instead of fragile DOM queries
+- **Read** content with `cat` instead of scraping innerHTML
+- **Search** for elements with `grep` instead of writing selectors
 
-The extension follows a **Thin Client / Fat Host** model.
+The filesystem abstraction is deterministic, semantic, and works on any website — no site-specific adapters needed.
 
-* **The Client (Side Panel):** Dumb terminal. It captures keystrokes and renders text. It knows nothing about the DOM.
-* **The Host (Background Service Worker):** The "Operating System." It maintains the Shell State (CWD, Environment Variables), manages the CDP connection, and executes logic.
+## Installation
 
----
+### From Source
 
-### **2. Project Structure & Manifest**
-
-**File Tree:**
-
-```text
-/src
-  /background
-    index.ts        # The "OS Kernel" (Command Parser, State Manager)
-    cdp_client.ts   # Wrapper for chrome.debugger API
-    vfs_mapper.ts   # Logic to map Accessibility Tree -> File System
-  /sidepanel
-    index.tsx       # Entry point
-    Terminal.tsx    # Xterm.js React Component
-  /shared
-    types.ts        # Message passing types
-  manifest.json
-
+```bash
+git clone https://github.com/apireno/AgenticShell.git
+cd AgenticShell
+npm install
+npm run build
 ```
 
-**`manifest.json` (Manifest V3)**
+### Load into Chrome
 
-```json
-{
-  "manifest_version": 3,
-  "name": "AgentShell",
-  "version": "1.0.0",
-  "permissions": [
-    "sidePanel",
-    "debugger",      // Vital: To read the AXTree and "click" blindly
-    "activeTab",     // Vital: To attach debugger to current site
-    "cookies",       // Vital: For 'whoami' session piggybacking
-    "identity",      // Vital: For 'login' OAuth flows
-    "storage"        // To save command history/env vars
-  ],
-  "host_permissions": ["<all_urls>"],
-  "background": {
-    "service_worker": "src/background/index.ts",
-    "type": "module"
-  },
-  "side_panel": {
-    "default_path": "src/sidepanel/index.html"
-  }
-}
+1. Open `chrome://extensions/`
+2. Enable **Developer mode** (toggle in top right)
+3. Click **Load unpacked**
+4. Select the `dist/` folder
+5. Click the AgentShell icon in your toolbar — the side panel opens
+
+## Usage
+
+### Getting Started
+
+Open any webpage, then open the AgentShell side panel. You'll see a terminal:
 
 ```
+╔══════════════════════════════════════╗
+║   AgentShell v1.0.0                  ║
+║   The DOM is your filesystem.        ║
+╚══════════════════════════════════════╝
 
----
+Type 'help' to see available commands.
+Type 'attach' to connect to the active tab.
 
-### **3. Core Module Specifications**
-
-#### **Module A: The Shell Kernel (`background/index.ts`)**
-
-This is the brain. It listens for messages from the Side Panel.
-
-* **State:**
-```typescript
-interface ShellState {
-  cwd: string[]; // e.g., ["root", "nav", "profile"]
-  attachedTabId: number | null;
-  env: Record<string, string>; // Variables like $USER, $API_KEY
-}
-
+agent@shell:$
 ```
 
-
-* **Message Handler:**
-* Receives: `{ type: "STDIN", input: "cd header" }`
-* Action: Parses command  Calls `FileSystem`  Returns Output.
-* Responds: `{ type: "STDOUT", output: "Changed directory to /header" }`
-
-
-
-#### **Module B: The Virtual Filesystem (`background/vfs_mapper.ts`)**
-
-This module translates the messy Accessibility Tree (AXTree) into clean filenames.
-
-* **Core Function: `getDirectoryListing(nodeId)**`
-1. Call CDP: `chrome.debugger.sendCommand({tabId}, "Accessibility.getChildIds", {id: nodeId})`.
-2. Retrieve Node Info: `Accessibility.getPartialAXTree`.
-3. **Heuristic Naming Algorithm (Critical):**
-* If `role` is "button" and `name` is "Submit"  `submit_btn`
-* If `role` is "link" and `name` is "Contact Us"  `contact_link`
-* If `role` is "generic" but has ID "main-content"  `main_content/`
-* *Fallback:* `element_452`
-
-
-
-
-
-#### **Module C: The CDP Client (`background/cdp_client.ts`)**
-
-Wraps the raw `chrome.debugger` API into Promises.
-
-* **Method: `attach(tabId)**`
-* Checks if already attached. If not, `chrome.debugger.attach({tabId}, "1.3")`.
-
-
-* **Method: `blindClick(nodeId)**`
-* We cannot click an AXNode directly. We must resolve it to a DOM Node.
-* Step 1: `DOM.describeNode({ backendNodeId: node.backendDOMNodeId })`
-* Step 2: `Runtime.evaluate("document.querySelector(...)")` OR use `Input.dispatchMouseEvent` on the coordinates found in the AXTree.
-
-
-
----
-
-### **4. Command Logic Implementation**
-
-Here is the pseudo-code logic for the coding agent to implement for the key commands.
-
-#### **Command: `ls` (List)**
-
-```typescript
-async function handleLs(state) {
-  // 1. Get current node ID from state.cwd
-  const currentNode = await CDP.getNode(state.cwd.last());
-  
-  // 2. Get children
-  const children = await CDP.getChildren(currentNode);
-
-  // 3. Format output
-  return children.map(child => {
-    const isDir = ["group", "navigation", "form", "section"].includes(child.role);
-    const suffix = isDir ? "/" : "";
-    const color = isDir ? "blue" : "white"; 
-    // Return ANSI colored string
-    return `\x1b[34m${child.generatedName}${suffix}\x1b[0m`;
-  }).join("\n");
-}
+First, attach to the current tab:
 
 ```
-
-#### **Command: `cd` (Change Directory)**
-
-```typescript
-async function handleCd(args, state) {
-  const targetName = args[0];
-  // 1. Get children of current CWD
-  const children = await CDP.getChildren(state.cwd.last());
-  
-  // 2. Find match
-  const match = children.find(c => c.generatedName === targetName);
-  
-  if (!match) return "Error: No such directory";
-  if (!match.isContainer) return "Error: Not a directory";
-
-  // 3. Update State
-  state.cwd.push(match.id);
-  return "";
-}
-
+agent@shell:$ attach
+✓ Attached to tab 123
+  Title: Example Website
+  URL:   https://example.com
+  AX Nodes: 247
 ```
 
-#### **Command: `click` (Execute)**
+### Navigating the DOM
 
-```typescript
-async function handleClick(args, state) {
-  const targetName = args[0];
-  // 1. Resolve target to BackendNodeId
-  const target = await resolveTarget(targetName, state);
+```bash
+# List children of the current node
+agent@shell:$ ls
+navigation/
+main/
+complementary/
+contentinfo/
+skip_to_content_link
+logo_link
 
-  // 2. Perform Action (Prefer JS Click for reliability over raw input simulation)
-  await CDP.send("Runtime.evaluate", {
-    expression: `document.querySelector('[data-backend-node-id="${target.id}"]').click()`
-    // Note: In reality, you map backendNodeId to a remote object ID first
-  });
-  
-  return "Action: Clicked " + targetName;
-}
+# Long format shows roles
+agent@shell:$ ls -l
+d navigation     navigation/
+d main           main/
+- link           skip_to_content_link
+- link           logo_link
 
+# Enter a directory (container element)
+agent@shell:$ cd navigation
+
+# See where you are
+agent@shell:$ pwd
+/navigation
+
+# Go back up
+agent@shell:$ cd ..
+
+# Jump to root
+agent@shell:$ cd /
+
+# Multi-level paths work too
+agent@shell:$ cd main/article/form
 ```
 
-#### **Command: `whoami` (Auth Check)**
+### Reading Content
 
-```typescript
-async function handleWhoami() {
-  const url = await getCurrentTabUrl();
-  const cookies = await chrome.cookies.getAll({ url });
-  
-  // Basic heuristic for common session cookies
-  const sessionCookie = cookies.find(c => 
-    c.name.match(/session|sid|auth|token/i)
-  );
-  
-  if (sessionCookie) {
-    return `User: Authenticated (via ${sessionCookie.name})\nExpires: ${sessionCookie.expirationDate}`;
-  } else {
-    return "User: Guest (No obvious session cookie found)";
-  }
-}
+```bash
+# Inspect an element's metadata and text
+agent@shell:$ cat submit_btn
+--- submit_btn ---
+  Role:  button
+  AXID:  42
+  Text:  Submit Form
 
+# Get a tree view (default depth: 2)
+agent@shell:$ tree
+navigation/
+├── home_link
+├── about_link
+├── products_link
+└── contact_link
+
+# Deeper tree
+agent@shell:$ tree 4
 ```
 
----
+### Interacting with Elements
 
-### **5. Instructions for the Coding Agent**
+```bash
+# Click a button or link
+agent@shell:$ click submit_btn
+✓ Clicked: submit_btn (button)
 
-Copy and paste the following prompt to your coding agent to start the build:
+# Focus an input field
+agent@shell:$ focus email_input
+✓ Focused: email_input
 
-> "I need you to build a Chrome Extension called 'AgentShell'. It is a Side Panel extension using React and Vite.
-> **The Goal:** Provide a terminal interface (using xterm.js) that allows a user to navigate the current webpage's DOM as if it were a filesystem.
-> **Tech Specs:**
-> 1. **Manifest V3:** Use `sidePanel`, `debugger`, and `activeTab` permissions.
-> 2. **Architecture:** React frontend in the Side Panel sends text commands to a Background Service Worker.
-> 3. **The 'FileSystem':** The Background script must use `chrome.debugger` to fetch the 'Accessibility Tree' of the active tab. Map the Accessibility Nodes to a virtual folder structure.
-> * Container nodes (Role=group, navigation) are 'Folders'.
-> * Interactive nodes (Role=button, link) are 'Files'.
-> 
-> 
-> 4. **Commands to Implement:**
-> * `ls`: List children of the current node.
-> * `cd [name]`: Enter a child node.
-> * `click [name]`: Trigger a click on the element.
-> * `pwd`: Show current path in the AXTree.
-> 
-> 
-> 
-> 
-> **First Step:** Initialize the Vite project with the Manifest V3 setup and get the Xterm.js side panel rendering and communicating 'Hello World' to the background script." 
+# Type into the focused field
+agent@shell:$ type hello@example.com
+✓ Typed 17 characters
+```
+
+### Searching
+
+```bash
+# Search current directory for matching elements
+agent@shell:$ grep login
+📄 login_btn (button)
+📁 login_form (form)
+📄 login_link (link)
+```
+
+### System Commands
+
+```bash
+# Check if you're authenticated (reads cookies)
+agent@shell:$ whoami
+URL: https://example.com
+Status: Authenticated
+Via: session_id
+Expires: 2025-12-31T00:00:00.000Z
+Total cookies: 12
+
+# Environment variables
+agent@shell:$ env
+SHELL=/bin/agentshell
+TERM=xterm-256color
+
+# Set a variable
+agent@shell:$ export API_KEY=sk-abc123
+
+# Re-fetch the AX tree after page navigation or DOM changes
+agent@shell:$ refresh
+✓ Refreshed. 312 AX nodes loaded.
+```
+
+## Command Reference
+
+| Command | Description |
+|---|---|
+| `help` | Show all available commands |
+| `attach` | Connect to the active browser tab via CDP |
+| `detach` | Disconnect from the current tab |
+| `refresh` | Re-fetch the Accessibility Tree |
+| `ls [-l]` | List children of the current node |
+| `cd <name>` | Enter a child container (`..` for parent, `/` for root) |
+| `pwd` | Print current path in the AX tree |
+| `tree [depth]` | Tree view of current node (default depth: 2) |
+| `cat <name>` | Read an element's role, value, and text content |
+| `grep <pattern>` | Search children by name, role, or value |
+| `click <name>` | Click an element |
+| `focus <name>` | Focus an input element |
+| `type <text>` | Type text into the focused element |
+| `whoami` | Check session/auth cookies for the current page |
+| `env` | Show environment variables |
+| `export K=V` | Set an environment variable |
+| `clear` | Clear the terminal |
+
+## How the Filesystem Mapping Works
+
+AgentShell reads the browser's **Accessibility Tree** (AXTree) via the Chrome DevTools Protocol. Each AX node gets mapped to a virtual file or directory:
+
+**Directories** (container roles): `navigation/`, `main/`, `form/`, `list/`, `region/`, `dialog/`, `menu/`, `table/`, etc.
+
+**Files** (interactive/leaf roles): `submit_btn`, `home_link`, `email_input`, `agree_chk`, `theme_switch`, etc.
+
+### Naming Heuristic
+
+Names are generated from the node's accessible name and role:
+
+| AX Node | Generated Name |
+|---|---|
+| `role=button, name="Submit"` | `submit_btn` |
+| `role=link, name="Contact Us"` | `contact_us_link` |
+| `role=textbox, name="Email"` | `email_input` |
+| `role=checkbox, name="I agree"` | `i_agree_chk` |
+| `role=navigation` | `navigation/` |
+| `role=generic, no name, 1 child` | *(flattened — child promoted up)* |
+
+Duplicate names are automatically disambiguated with `_2`, `_3`, etc.
+
+### Color Coding in `ls`
+
+- **Blue (bold)** — Directories (containers)
+- **Green (bold)** — Buttons
+- **Magenta (bold)** — Links
+- **Yellow (bold)** — Text inputs / search boxes
+- **Cyan (bold)** — Checkboxes / radio buttons / switches
+- **White** — Other elements
+
+## Architecture
+
+```
+┌─────────────────────┐     chrome.runtime.connect()     ┌─────────────────────┐
+│   Side Panel (UI)   │ ◄──────────────────────────────► │  Background Worker  │
+│                     │    STDIN/STDOUT messages          │   (Shell Kernel)    │
+│  React + Xterm.js   │                                   │                     │
+│  Dumb terminal —    │                                   │  Command parser     │
+│  captures keys,     │                                   │  Shell state (CWD)  │
+│  renders text       │                                   │  VFS mapper         │
+│                     │                                   │  CDP client         │
+└─────────────────────┘                                   └────────┬────────────┘
+                                                                   │
+                                                          chrome.debugger
+                                                                   │
+                                                          ┌────────▼────────────┐
+                                                          │   Active Tab        │
+                                                          │   Accessibility     │
+                                                          │   Tree (AXTree)     │
+                                                          └─────────────────────┘
+```
+
+The extension follows a **Thin Client / Fat Host** model. The side panel is a dumb terminal — it captures keystrokes and renders ANSI-colored text. All logic lives in the background service worker: command parsing, AX tree traversal, filesystem mapping, and CDP interaction.
+
+### Source Layout
+
+```
+src/
+  background/
+    index.ts        # Shell Kernel — command parser, state manager, message router
+    cdp_client.ts   # Promise-wrapped chrome.debugger API
+    vfs_mapper.ts   # Accessibility Tree → virtual filesystem mapping
+  sidepanel/
+    index.html      # Side panel entry HTML
+    index.tsx       # React entry point
+    Terminal.tsx    # Xterm.js terminal component (Tokyo Night theme)
+  shared/
+    types.ts        # Message types, AXNode interfaces, role constants
+public/
+  manifest.json     # Chrome Manifest V3
+```
+
+## Tech Stack
+
+- **React** + **TypeScript** — Side panel UI
+- **Xterm.js** (`@xterm/xterm`) — Terminal emulator with Tokyo Night color scheme
+- **Vite** — Build tooling with multi-entry Chrome Extension support
+- **Chrome DevTools Protocol** (CDP) via `chrome.debugger` — AX tree access and element interaction
+- **Chrome Manifest V3** — `sidePanel`, `debugger`, `activeTab`, `cookies` permissions
+
+## Development
+
+```bash
+# Watch mode (rebuilds on file changes)
+npm run dev
+
+# One-time production build
+npm run build
+
+# Type checking
+npm run typecheck
+```
+
+After building, reload the extension in `chrome://extensions/` to pick up changes.
+
+## How This Project Was Built
+
+The technical specification for AgentShell was authored by **Google Gemini**, designed as a comprehensive prompt that could be handed directly to a coding agent to scaffold and build the entire project from scratch. The full original specification is preserved in [`intitial_project_prompt.md`](intitial_project_prompt.md).
+
+The implementation was then built by **Claude** (Anthropic) via [Claude Code](https://claude.ai/code), working from that specification.
+
+An AI-designed project, built by another AI, intended for AI agents to use. It's agents all the way down.
+
+## License
+
+ISC

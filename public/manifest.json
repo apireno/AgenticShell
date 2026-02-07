@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "AgentShell",
+  "description": "A Headless OS for agents — browse the web using standard Linux commands via a terminal in the Chrome Side Panel.",
+  "version": "1.0.0",
+  "permissions": [
+    "sidePanel",
+    "debugger",
+    "activeTab",
+    "cookies",
+    "identity",
+    "storage"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "action": {
+    "default_title": "AgentShell"
+  },
+  "icons": {}
+}
