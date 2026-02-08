@@ -321,8 +321,17 @@ EFFICIENT PATTERNS:
 1. Scoped Extraction: open URL → cd main/article → find --type heading (locate section) → cd section → text (content) + find --type link --meta (links)
 2. Table Reading: find --type table → text table_element (reads ALL rows at once). For structured data, read the whole table, don't read row-by-row.
 3. Section Discovery: grep "section_name" (recursive: true) OR find "section_name". NOT ls --offset pagination (too many calls).
-4. Link Extraction: cd into the container with links → find --type link --meta. Returns every link with its href in one call.
+4. Link Extraction: cd into the container with links → find --type link --meta. Use --text with a pattern to filter by visible text: find --type link --text "keyword" --meta.
 5. Form Interaction: find --type textbox → focus input → type "query" → click submit_button. If page doesn't navigate, use domshell_navigate as fallback.
+
+COMMAND CHAINING (grep is the linchpin):
+grep discovers sections and elements by name, giving you paths for subsequent commands. Chain pattern: grep (locate) → cd (scope) → extract (read/find/text). Examples:
+- Article extraction: grep "article" (recursive) → cd article/ → text (bulk content)
+- Link harvesting: grep "references" (recursive) → cd references/ → find --type link --meta (all URLs)
+- Table data: grep "table" (recursive) → extract_table table_1234 (structured output)
+- Targeted content: grep "results" (recursive) → cd results/ → find --type heading → cd target_heading/ → text
+- Content search: grep "keyword" (recursive, content: true) → finds elements whose VISIBLE TEXT contains keyword → cd to parent → text
+The key insight: grep output feeds cd, and cd scopes everything else. Never skip the grep step when you don't know where content lives.
 
 ANTI-PATTERNS (avoid these):
 - Do NOT cd into an element just to read its text — use text element_name instead (saves a cd + cd .. round trip)
@@ -397,7 +406,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_find",
-    "Deep recursive search from the CURRENT DIRECTORY downward. Scope matters: cd into a section first, then find, to get only that section's elements (fewer, more relevant results). Returns full paths to matching elements.\n\nKey flags:\n  --type ROLE   Filter by AX role (link, button, heading, textbox, table, list, etc.)\n  --meta        Include DOM properties (href, src, id) inline — essential for extracting URLs\n  --text        Show visible text preview per result\n\nCommon patterns:\n  find --type link --meta              All links with URLs under current directory\n  find --type heading                  All section headings (to locate 'See Also', 'References', etc.)\n  find --type table                    Find tables for data extraction\n  find 'paragraph'                     Find paragraph elements by name pattern\n\nEfficiency tip: cd into the container you care about FIRST, then find within it. This avoids sidebar/nav/footer noise in results. Use 'text element_name' on find results to read their content without cd'ing.",
+    "Deep recursive search from the CURRENT DIRECTORY downward. Scope matters: cd into a section first, then find, to get only that section's elements (fewer, more relevant results). Returns full paths to matching elements.\n\nKey flags:\n  --type ROLE   Filter by AX role (link, button, heading, textbox, table, list, etc.)\n  --meta        Include DOM properties (href, src, id) inline — essential for extracting URLs\n  --text        Show visible text preview per result\n\nCommon patterns:\n  find --type link --meta              All links with URLs under current directory\n  find --type heading                  All section headings (to locate 'See Also', 'References', etc.)\n  find --type table                    Find tables for data extraction\n  find 'paragraph'                     Find paragraph elements by name pattern\n\nEfficiency tip: cd into the container you care about FIRST, then find within it. This avoids sidebar/nav/footer noise in results. Use 'text element_name' on find results to read their content without cd'ing.\n\nWhen --text is used with a search pattern, elements are also matched against their visible text content (not just name/role). Example: find --type link --text 'login' --meta finds links whose displayed text contains 'login' and shows their hrefs — even when the text is in nested spans.",
     {
       pattern: z.string().optional().describe("Search pattern (matches name, role, value)"),
       type: z.string().optional().describe("Filter by AX role (e.g. 'button', 'link', 'textbox', 'combobox')"),
@@ -422,7 +431,7 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "domshell_grep",
-    "Search for elements matching a pattern. Matches against name, role, and value. Case-insensitive.\n\nBy default, searches only IMMEDIATE children. Use recursive: true to search all descendants — this is almost always what you want for finding sections or elements by name.\n\nCommon patterns:\n  grep 'see_also' (recursive: true)      Find a section by name anywhere below\n  grep 'heading' (recursive: true)        Find all headings in the subtree\n  grep 'button'                           Find buttons among immediate children",
+    "Search for elements matching a pattern. Matches against name, role, and value. Case-insensitive.\n\nBy default, searches only IMMEDIATE children. Use recursive: true to search all descendants — this is almost always what you want for finding sections or elements by name.\n\ngrep is the primary section-discovery tool. Its output gives you element names and paths that you then use with cd, text, find, and other commands. This is how you chain commands together efficiently.\n\nCommon patterns:\n  grep 'see_also' (recursive: true)      Find a section by name anywhere below\n  grep 'heading' (recursive: true)        Find all headings in the subtree\n  grep 'button'                           Find buttons among immediate children\n\nWorkflow chains (grep → cd → extract):\n  1. Find + Read: grep 'references' (recursive: true) → cd references/ → text\n  2. Find + Links: grep 'sidebar' (recursive: true) → cd sidebar/ → find --type link --meta\n  3. Find + Table: grep 'table' (recursive: true) → extract_table table_1234\n  4. Scoped Search: grep 'article' (recursive: true) → cd article/ → find --type heading → cd into target section → text\n  5. Content Discovery: grep 'results' (recursive: true, content: true) → cd search_results/ → read --text\n\ngrep tells you WHERE things are; cd + text/find/extract_links/extract_table gets the content. Always grep first to scope your work, then extract within that scope.",
     {
       pattern: z.string().describe("Search pattern"),
       recursive: z.boolean().optional().describe("Search all descendants recursively"),

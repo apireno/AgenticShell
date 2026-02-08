@@ -679,7 +679,7 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\r\n"),
 
   grep: [
-    "\x1b[1;36mgrep\x1b[0m \u2014 Search children for matching names",
+    "\x1b[1;36mgrep\x1b[0m \u2014 Search children for matching names (section discovery tool)",
     "",
     "\x1b[33mUsage:\x1b[0m grep [options] <pattern>",
     "",
@@ -690,6 +690,14 @@ const COMMAND_HELP: Record<string, string> = {
     "",
     "Matches against name, role, and value. Case-insensitive.",
     "Use --content to also match against the element's displayed text.",
+    "",
+    "\x1b[33mWorkflow chains (grep \u2192 cd \u2192 extract):\x1b[0m",
+    "  grep -r article   \u2192  cd article/      \u2192  text",
+    "  grep -r references \u2192  cd references/  \u2192  find --type link --meta",
+    "  grep -r table     \u2192  extract_table table_1234",
+    "  grep -r heading   \u2192  cd target_section/ \u2192  text",
+    "",
+    "grep tells you WHERE things are. cd + text/find gets the content.",
   ].join("\r\n"),
 
   find: [
@@ -708,6 +716,9 @@ const COMMAND_HELP: Record<string, string> = {
     "Searches the entire tree from CWD down. Shows the full path.",
     "Use --meta with --type link to find all URLs on a page.",
     "Use --content to find elements by their displayed text (e.g. find 'see also' --content).",
+    "",
+    "When --text is used with a pattern, also matches against visible text content.",
+    "  find --type link --text login --meta    Find links with 'login' text + show hrefs",
   ].join("\r\n"),
 
   tree: [
@@ -2137,9 +2148,10 @@ async function handleFind(args: string[]): Promise<string> {
   const limit = pa.named["-n"] ? parseInt(pa.named["-n"], 10) : 0;
   const showMeta = pa.flags.has("--meta");
   const showText = pa.flags.has("--text");
-  const contentMatch = pa.flags.has("--content");
   const textLen = pa.named["--textlen"] ? parseInt(pa.named["--textlen"], 10) : 80;
   const pattern = pa.positional[0]?.toLowerCase() ?? "";
+  // --text with a pattern implicitly enables content matching
+  const contentMatch = pa.flags.has("--content") || (showText && !!pattern);
 
   if (!pattern && !typeFilter) {
     return "\x1b[31mUsage: find [options] <pattern> (see find --help)\x1b[0m";
@@ -2203,20 +2215,21 @@ async function findRecursive(
   for (const child of children) {
     if (limit > 0 && results.length >= limit) return;
 
+    // Check type filter first (cheap) before expensive content match
+    const matchesType = !typeFilter || child.role.toLowerCase() === typeFilter;
+
     let matchesPattern = !pattern ||
       child.name.toLowerCase().includes(pattern) ||
       child.role.toLowerCase().includes(pattern) ||
       (child.value && child.value.toLowerCase().includes(pattern));
 
-    // Slow path: match against visible text content (only if --content flag)
-    if (!matchesPattern && contentMatch && pattern && child.backendDOMNodeId) {
+    // Slow path: match against visible text content — only for type-matched nodes
+    if (!matchesPattern && contentMatch && pattern && matchesType && child.backendDOMNodeId) {
       try {
         const text = await cdp.getInnerText(child.backendDOMNodeId);
         matchesPattern = text.toLowerCase().includes(pattern);
       } catch { /* stale node */ }
     }
-
-    const matchesType = !typeFilter || child.role.toLowerCase() === typeFilter;
 
     if (matchesPattern && matchesType) {
       results.push({ path: pathPrefix, node: child });

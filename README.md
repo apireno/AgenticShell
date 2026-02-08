@@ -337,6 +337,53 @@ dom@shell:~$find --type link --meta
 [x] /main/Read_more (link)  href=https://example.com/article <a>
 ```
 
+### Command Chaining with Grep
+
+`grep` is the linchpin for multi-step workflows. It discovers where content lives, giving you section names and paths that feed into `cd`, `text`, `find`, and extraction commands. The pattern is: **grep (locate) → cd (scope) → extract (read)**.
+
+```bash
+# Workflow 1: Find and read an article section
+dom@shell:~$ grep -r article
+[d] article (article)  →  ./main/article/
+dom@shell:~$ cd main/article
+dom@shell:~/main/article$ text
+[full article content in one call]
+
+# Workflow 2: Find a section and extract its links
+dom@shell:~$ grep -r references
+[d] references (region)  →  ./main/article/references/
+dom@shell:~$ cd main/article/references
+dom@shell:~/main/article/references$ find --type link --meta
+[x] /wiki_link (link)  href=https://en.wikipedia.org/... <a>
+[x] /paper_link (link)  href=https://arxiv.org/... <a>
+
+# Workflow 3: Find a table and extract structured data
+dom@shell:~$ grep -r table
+[d] table_4091 (table)  →  ./main/section/table_4091/
+dom@shell:~$ extract_table table_4091
+| Name   | Value  | Date       |
+|--------|--------|------------|
+| Alpha  | 42     | 2025-01-15 |
+| Beta   | 87     | 2025-02-20 |
+
+# Workflow 4: Discover sections, then drill into one
+dom@shell:~$ grep -r heading
+[−] Introduction_heading (heading)  →  ./main/article/Introduction_heading
+[−] Methods_heading (heading)  →  ./main/article/Methods_heading
+[−] Results_heading (heading)  →  ./main/article/Results_heading
+dom@shell:~$ cd main/article/Results_heading
+dom@shell:~/main/article/Results_heading$ text
+[text content of the Results section]
+
+# Workflow 5: Find elements by visible text (not just name)
+dom@shell:~$ grep -r --content "sign up"
+[x] get_started_btn (button)  →  ./main/hero/get_started_btn
+# The button's NAME is "get_started_btn" but its displayed text says "Sign Up Free"
+dom@shell:~$ click get_started_btn
+```
+
+The key insight: `grep` output feeds `cd`, and `cd` scopes everything else. When you don't know where content lives on a page, always grep first, then scope, then extract.
+
 ### Interacting with Elements
 
 ```bash
@@ -480,17 +527,21 @@ Options:
 
 | Command | Description |
 |---|---|
-| `ls [options]` | List children (`-l`, `--meta`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
+| `ls [options]` | List children (`-l`, `--meta`, `--text`, `-r`, `-n N`, `--offset N`, `--type ROLE`, `--count`) |
 | `cd <path>` | Navigate (`..`, `~` or `/` for browser root, `%here%` for focused tab, `main/form` for multi-level) |
 | `pwd` | Print current path (DOM path or browser path) |
 | `tree [depth]` | Tree view of current node (default depth: 2) |
 | `cat <name>` | Full element metadata: AX info + DOM properties (tag, href, src, id, class, outerHTML) |
 | `text [name] [-n N]` | Bulk extract all text from a section (much faster than multiple `cat`) |
-| `grep [opts] <pattern>` | Search children by name/role/value (`-r` recursive, `-n N` limit) |
-| `find [opts] <pattern>` | Deep recursive search with full paths (`--type ROLE`, `--meta`, `-n N`) |
+| `read [name] [opts]` | Structured subtree extraction (`--meta`, `--text`, `-d N` depth) — tree + content in one call |
+| `grep [opts] <pattern>` | Search by name/role/value (`-r` recursive, `--content` match visible text, `-n N` limit) |
+| `find [opts] <pattern>` | Deep recursive search (`--type ROLE`, `--meta`, `--text`, `--content`, `-n N`) |
+| `extract_links [name]` | Extract all links as `[text](url)` format (`-n N` limit) |
+| `extract_table <name>` | Extract table as markdown or CSV (`--format csv`, `-n N` row limit) |
 | `click <name>` | Click an element (falls back to coordinate-based click) |
 | `focus <name>` | Focus an input element |
 | `type <text>` | Type text into the focused element |
+| `submit <input> <val>` | Atomic form fill: focus + clear + type + submit (`--submit btn` or Enter) |
 | `refresh` | Force re-fetch the Accessibility Tree |
 
 ### System
@@ -849,15 +900,19 @@ dom@shell:$ disconnect
 | `domshell_pwd` | `pwd` | Read |
 | `domshell_cat` | `cat <name>` | Read |
 | `domshell_text` | `text [name] [-n N]` (bulk text extraction) | Read |
-| `domshell_find` | `find [pattern] [--type ROLE] [--meta] [-n N]` | Read |
-| `domshell_grep` | `grep [-r] [-n N] <pattern>` | Read |
+| `domshell_read` | `read [name] [--meta] [--text] [-d N]` (structured subtree) | Read |
+| `domshell_find` | `find [pattern] [--type ROLE] [--meta] [--text] [-n N]` | Read |
+| `domshell_grep` | `grep [-r] [-n N] [--content] <pattern>` (section discovery) | Read |
 | `domshell_tree` | `tree [depth]` | Read |
+| `domshell_extract_links` | `extract_links [name] [-n N]` (all links as `[text](url)`) | Read |
+| `domshell_extract_table` | `extract_table <name> [--format csv]` (table → markdown/CSV) | Read |
 | `domshell_refresh` | `refresh` | Read |
 | `domshell_navigate` | `navigate <url>` (current tab) | Navigate |
 | `domshell_open` | `open <url>` (new tab) | Navigate |
 | `domshell_click` | `click <name>` | Write |
 | `domshell_focus` | `focus <name>` | Write |
 | `domshell_type` | `type <text>` | Write |
+| `domshell_submit` | `submit <input> <value> [--submit btn]` (atomic form fill) | Write |
 | `domshell_whoami` | `whoami` | Sensitive |
 | `domshell_execute` | *(any command)* | Varies |
 
