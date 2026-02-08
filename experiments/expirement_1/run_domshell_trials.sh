@@ -5,12 +5,11 @@
 # Prerequisites:
 #   - Chrome open with DOMShell extension loaded and connected
 #   - claude CLI installed and authenticated
-#   - domshell MCP server configured in ~/.claude/settings.json or claude_desktop_config.json
-
-set -euo pipefail
+#   - domshell MCP server configured in .mcp.json (in this directory) or ~/.claude/settings.json
 
 RESULTS_DIR="$(cd "$(dirname "$0")" && pwd)/as_results"
 mkdir -p "$RESULTS_DIR"
+TIMEOUT_SECS=300  # 5 minutes per trial
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -98,6 +97,7 @@ TRIALS=(
 echo "═══════════════════════════════════════════════════"
 echo "  DOMShell Trial Runner — 6 trials"
 echo "  Results will be saved to: $RESULTS_DIR/"
+echo "  Timeout: ${TIMEOUT_SECS}s per trial"
 echo "═══════════════════════════════════════════════════"
 echo ""
 
@@ -109,39 +109,49 @@ for entry in "${TRIALS[@]}"; do
   echo "  TRIAL $trial_num  (Task $task_num — DOMShell)"
   echo "──────────────────────────────────────────────────"
 
-  outfile="$RESULTS_DIR/trial_${trial_num}.txt"
+  outfile="$RESULTS_DIR/trial_${trial_num}.json"
+  errfile="$RESULTS_DIR/trial_${trial_num}_stderr.txt"
   start_ms=$(python3 -c 'import time; print(int(time.time()*1000))')
 
-  # Run claude in print mode with 90s timeout
-  # --dangerously-skip-permissions avoids interactive prompts
-  # --output-format json gives us structured output with tool call info
-  set +e
-  timeout 90 claude -p \
+  # Run claude -p in background so we can implement timeout via kill
+  claude -p \
     --dangerously-skip-permissions \
-    --allowedTools "mcp__domshell__domshell_tabs,mcp__domshell__domshell_here,mcp__domshell__domshell_ls,mcp__domshell__domshell_cd,mcp__domshell__domshell_pwd,mcp__domshell__domshell_cat,mcp__domshell__domshell_find,mcp__domshell__domshell_grep,mcp__domshell__domshell_tree,mcp__domshell__domshell_text,mcp__domshell__domshell_refresh,mcp__domshell__domshell_click,mcp__domshell__domshell_focus,mcp__domshell__domshell_type,mcp__domshell__domshell_navigate,mcp__domshell__domshell_open,mcp__domshell__domshell_execute" \
+    --allowedTools "mcp__domshell__domshell_tabs mcp__domshell__domshell_here mcp__domshell__domshell_ls mcp__domshell__domshell_cd mcp__domshell__domshell_pwd mcp__domshell__domshell_cat mcp__domshell__domshell_find mcp__domshell__domshell_grep mcp__domshell__domshell_tree mcp__domshell__domshell_text mcp__domshell__domshell_refresh mcp__domshell__domshell_click mcp__domshell__domshell_focus mcp__domshell__domshell_type mcp__domshell__domshell_navigate mcp__domshell__domshell_open mcp__domshell__domshell_execute" \
     --output-format json \
-    --no-session-persistence \
-    "$prompt" > "$outfile" 2>/dev/null
+    "$prompt" > "$outfile" 2>"$errfile" &
+  pid=$!
+
+  # Watchdog: kill after TIMEOUT_SECS
+  ( sleep "$TIMEOUT_SECS" && kill "$pid" 2>/dev/null ) &
+  watchdog=$!
+
+  # Wait for claude to finish (or be killed)
+  wait "$pid" 2>/dev/null
   exit_code=$?
-  set -e
+
+  # Clean up watchdog if claude finished before timeout
+  kill "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null
 
   end_ms=$(python3 -c 'import time; print(int(time.time()*1000))')
   elapsed_ms=$((end_ms - start_ms))
   elapsed_s=$(echo "scale=1; $elapsed_ms / 1000" | bc)
 
   timed_out="No"
-  if [ $exit_code -eq 124 ]; then
+  if [ "$exit_code" -eq 137 ] || [ "$exit_code" -eq 143 ]; then
     timed_out="Yes"
   fi
 
   # Count tool calls from JSON output
-  tool_calls=$(grep -o '"tool_use"' "$outfile" 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$tool_calls" = "0" ]; then
-    # fallback: count domshell mentions
-    tool_calls=$(grep -oi 'domshell_[a-z]*' "$outfile" 2>/dev/null | wc -l | tr -d ' ')
+  tool_calls=0
+  if [ -s "$outfile" ]; then
+    tool_calls=$(grep -c '"tool_use"' "$outfile" 2>/dev/null || true)
+    if [ "$tool_calls" -eq 0 ]; then
+      tool_calls=$(grep -oi 'domshell_[a-z]*' "$outfile" 2>/dev/null | wc -l | tr -d ' ' || true)
+    fi
   fi
 
-  echo "  Time: ${elapsed_s}s | Tool calls: ~${tool_calls} | Timed out: ${timed_out}"
+  echo "  Time: ${elapsed_s}s | Tool calls: ~${tool_calls} | Timed out: ${timed_out} | Exit: ${exit_code}"
   echo "  Output saved to: $outfile"
   echo ""
 
@@ -151,7 +161,7 @@ Trial $trial_num | Task $task_num | Tool calls: $tool_calls | Time: ${elapsed_s}
 SUMMARY
 
   # Small pause between trials to let the extension settle
-  sleep 2
+  sleep 3
 done
 
 echo "═══════════════════════════════════════════════════"
@@ -160,6 +170,6 @@ echo ""
 echo "  Quick summary:"
 cat "$RESULTS_DIR/summary.txt"
 echo ""
-echo "  Next: review each trial_N.txt for correctness,"
+echo "  Next: review each trial_N.json for correctness,"
 echo "  then paste results into results.md"
 echo "═══════════════════════════════════════════════════"

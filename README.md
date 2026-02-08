@@ -576,44 +576,49 @@ DOMShell discovers iframes via `Page.getFrameTree` and fetches each iframe's AX 
 ## Architecture
 
 ```
-┌────────────────────┐                                     ┌─────────────────────┐
-│  Claude Desktop /  │  MCP protocol (stdio)               │  Side Panel (UI)    │
-│  MCP Client        │────────────────────┐                │                     │
-└────────────────────┘                    │                │  React + Xterm.js   │
-                                          ▼                │  - Paste support    │
-                               ┌─────────────────────┐    │  - Tab completion   │
-                               │  MCP Server          │    │  - Command history  │
-                               │  (mcp-server/)       │    └─────────┬───────────┘
-                               │                      │              │
-                               │  Security layer:     │     chrome.runtime
-                               │  - Auth token        │     .connect()
-                               │  - Command tiers     │              │
-                               │  - Domain allowlist  │    ┌─────────▼───────────┐
-                               │  - Audit log         │    │  Background Worker  │
-                               │  - Confirmation      │    │   (Shell Kernel)    │
-                               └──────────┬───────────┘    │                     │
-                                          │                │  Browser hierarchy  │
-                               WebSocket (localhost:9876)   │  (~, tabs, windows) │
-                               + auth token                │  Command parser     │
-                               + alarm keepalive           │  Shell state (CWD)  │
-                                          │                │  VFS mapper         │
-                                          └───────────────►│  CDP client         │
-                                                           │  DOM change detect  │
-                                                           │  WebSocket bridge   │
-                                                           └─────────┬───────────┘
-                                                                     │
-                                                            chrome.debugger
-                                                            (CDP 1.3)
-                                                                     │
-                                                           ┌─────────▼───────────┐
-                                                           │   Active Tab        │
-                                                           │   Accessibility     │
-                                                           │   Tree + iframes    │
-                                                           │                     │
-                                                           │   DOM events ──────►│
-                                                           │   (auto-refresh)    │
-                                                           └─────────────────────┘
+┌────────────────────┐
+│  Claude Desktop    │──┐
+└────────────────────┘  │
+┌────────────────────┐  │  HTTP POST/GET/DELETE              ┌─────────────────────┐
+│  Claude CLI        │──┼─ localhost:3001/mcp ──┐            │  Side Panel (UI)    │
+└────────────────────┘  │  (Bearer token auth)  │            │                     │
+┌────────────────────┐  │                       │            │  React + Xterm.js   │
+│  Cursor / Other    │──┘                       │            │  - Paste support    │
+└────────────────────┘                          ▼            │  - Tab completion   │
+                               ┌─────────────────────┐      │  - Command history  │
+                               │  MCP Server          │      └─────────┬───────────┘
+                               │  (mcp-server/)       │                │
+                               │                      │       chrome.runtime
+                               │  Express HTTP server  │       .connect()
+                               │  Per-session MCP      │                │
+                               │  Security layer:     │      ┌─────────▼───────────┐
+                               │  - Auth token        │      │  Background Worker  │
+                               │  - Command tiers     │      │   (Shell Kernel)    │
+                               │  - Domain allowlist  │      │                     │
+                               │  - Audit log         │      │  Browser hierarchy  │
+                               └──────────┬───────────┘      │  (~, tabs, windows) │
+                                          │                  │  Command parser     │
+                               WebSocket (localhost:9876)     │  Shell state (CWD)  │
+                               + auth token                  │  VFS mapper         │
+                               + alarm keepalive             │  CDP client         │
+                                          │                  │  DOM change detect  │
+                                          └─────────────────►│  WebSocket bridge   │
+                                                             └─────────┬───────────┘
+                                                                       │
+                                                              chrome.debugger
+                                                              (CDP 1.3)
+                                                                       │
+                                                             ┌─────────▼───────────┐
+                                                             │   Active Tab        │
+                                                             │   Accessibility     │
+                                                             │   Tree + iframes    │
+                                                             │                     │
+                                                             │   DOM events ──────►│
+                                                             │   (auto-refresh)    │
+                                                             └─────────────────────┘
 ```
+
+The MCP server runs as a **standalone HTTP service** that any number of MCP clients can connect to simultaneously. It exposes two ports: an HTTP endpoint for MCP clients (default 3001) and a WebSocket bridge for the Chrome extension (default 9876).
 
 The extension follows a **Thin Client / Fat Host** model. The side panel is a dumb terminal — it captures keystrokes, handles paste, and renders ANSI-colored text. All logic lives in the background service worker: command parsing, AX tree traversal, filesystem mapping, CDP interaction, browser hierarchy navigation, and DOM change detection.
 
@@ -635,7 +640,8 @@ public/
   manifest.json     # Chrome Manifest V3
   options.html      # Extension settings page (MCP bridge config)
 mcp-server/
-  index.ts          # MCP server — WebSocket bridge, security hardening, audit log
+  index.ts          # MCP server — standalone Express HTTP + StreamableHTTP, WebSocket bridge, security
+  proxy.ts          # Stdio↔HTTP bridge for clients that require command/args (e.g. Claude Desktop)
   package.json      # MCP server dependencies
   tsconfig.json     # MCP server TypeScript config
 ```
@@ -663,21 +669,27 @@ npm run typecheck
 
 After building, reload the extension on `chrome://extensions/` and reopen the side panel to pick up changes.
 
-## Connecting Claude Desktop (MCP Server)
+## Connecting MCP Clients (Claude Desktop, CLI, Cursor, etc.)
 
-DOMShell includes a hardened MCP server that lets Claude Desktop (or any MCP-compatible client) control the browser through DOMShell commands.
+DOMShell includes a hardened MCP server that lets any MCP-compatible client control the browser through DOMShell commands. The server runs as a standalone HTTP service — multiple clients can connect simultaneously.
 
 ### Architecture
 
 ```
-Claude Desktop
-  ↓ MCP protocol (stdio)
-mcp-server/index.ts (Node.js)
-  ↕ WebSocket (localhost:9876) + auth token
-Chrome Extension background.js
-  ↓ CDP
-Browser DOM
+User starts independently:
+  npx tsx mcp-server/index.ts --allow-write --token xyz
+    → HTTP on :3001/mcp  (MCP clients)
+    → WebSocket on :9876  (Chrome extension)
+
+Claude Desktop spawns (stdio proxy):                    ┐
+  npx tsx mcp-server/proxy.ts --port 3001 --token xyz   ├─► HTTP :3001/mcp
+Claude CLI connects directly:                           │
+  url: http://localhost:3001/mcp?token=xyz              │
+Gemini CLI connects directly:                           │
+  url: http://localhost:3001/mcp?token=xyz              ┘
 ```
+
+The MCP server is a **standalone HTTP service** — you start it independently, and any number of MCP clients connect to it. No single client "owns" the server process. For clients that require stdio (like Claude Desktop), a tiny proxy (`proxy.ts`) bridges stdio to the running HTTP server.
 
 ### Setup
 
@@ -688,23 +700,44 @@ cd mcp-server
 npm install
 ```
 
-**2. Configure Claude Desktop:**
+**2. Start the MCP server:**
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+```bash
+cd mcp-server
+npx tsx index.ts --allow-write --no-confirm --token my-secret-token
+```
+
+The server starts two listeners:
+- **HTTP** on `http://127.0.0.1:3001/mcp` — MCP client endpoint
+- **WebSocket** on `ws://127.0.0.1:9876` — Chrome extension bridge
+
+> **Tip:** Use `--token` to set a known token so you can pre-configure clients. If omitted, a random token is generated and printed on startup.
+
+**3. Connect MCP clients:**
+
+**Claude CLI / Gemini CLI / Cursor** (direct HTTP — recommended):
+
+```
+http://localhost:3001/mcp?token=my-secret-token
+```
+
+**Claude Desktop** (requires stdio — use the proxy):
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS):
 
 ```json
 {
   "mcpServers": {
     "domshell": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/DOMShell/mcp-server/index.ts", "--allow-write", "--no-confirm", "--token", "my-secret-token"],
+      "args": ["tsx", "/absolute/path/to/DOMShell/mcp-server/proxy.ts", "--port", "3001", "--token", "my-secret-token"],
       "env": {}
     }
   }
 }
 ```
 
-> **Note:** Use an absolute path (not `~`). The `--token` flag lets you set a known token so you can configure both sides without copy-pasting. The `--no-confirm` flag is recommended for Claude Desktop since the MCP server has no terminal for interactive confirmation prompts.
+> **Note:** The proxy connects to the already-running server over HTTP. If the server isn't running, the proxy will fail. Use an absolute path (not `~`).
 
 Restart Claude Desktop. DOMShell tools will appear.
 
@@ -755,7 +788,8 @@ The **Navigate** tier is separate from Write because navigation is equivalent to
 | `--no-confirm` | Skip user confirmation for write actions (use with caution) |
 | `--domains example.com,app.example.com` | Restrict commands to specific domains |
 | `--expose-cookies` | Show full cookie values (default: redacted) |
-| `--port N` | WebSocket port (default: 9876) |
+| `--mcp-port N` | MCP HTTP endpoint port (default: 3001) |
+| `--port N` | WebSocket bridge port (default: 9876) |
 | `--log-file PATH` | Audit log file (default: audit.log) |
 
 #### User Confirmation

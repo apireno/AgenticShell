@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "domshell": {
+      "command": "npx",
+      "args": ["tsx", "/Users/apireno/repos/DOMShell/mcp-server/index.ts", "--allow-write", "--port", "9877", "--token", "test-token-123"],
+      "env": {
+        "DOMSHELL_TOKEN": "test-token-123"
+      }
+    }
+  }
+}
