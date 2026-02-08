@@ -2,7 +2,7 @@
   "mcpServers": {
     "domshell": {
       "command": "npx",
-      "args": ["tsx", "/Users/apireno/repos/DOMShell/mcp-server/proxy.ts", "--port", "3001", "--token", "test-token-123"],
+      "args": ["tsx", "/Users/apireno/repos/DOMShell/mcp-server/proxy.ts", "--port", "3001", "--token", "secret_token_here"],
       "env": {}
     }
   }
