@@ -26,8 +26,17 @@
     "open_in_tab": false
   },
   "action": {
-    "default_title": "DOMShell"
+    "default_title": "DOMShell",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   },
   "homepage_url": "https://github.com/apireno/DOMShell",
-  "icons": {}
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
 }

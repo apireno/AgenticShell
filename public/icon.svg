@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="62" fill="#1a1a2e" stroke="#3a3a5c" stroke-width="2"/>
+
+  <!-- Bomb body - olive drab, tilted ~30 degrees -->
+  <g transform="translate(64,68) rotate(-30)">
+    <!-- Main body -->
+    <ellipse cx="0" cy="0" rx="22" ry="38" fill="#4a5a2b"/>
+    <ellipse cx="0" cy="0" rx="22" ry="38" fill="none" stroke="#3a4a1b" stroke-width="1"/>
+
+    <!-- Yellow band -->
+    <rect x="-22" y="-4" width="44" height="6" rx="1" fill="#d4a017" opacity="0.9"/>
+
+    <!-- Nose cone (bottom) -->
+    <path d="M-18,32 Q-18,36 -14,42 Q-8,50 0,54 Q8,50 14,42 Q18,36 18,32" fill="#4a5a2b" stroke="#3a4a1b" stroke-width="1"/>
+
+    <!-- Shark teeth - white triangles -->
+    <g fill="white" stroke="#ddd" stroke-width="0.5">
+      <!-- Top row (pointing down) -->
+      <polygon points="-16,32 -12,44 -8,32"/>
+      <polygon points="-8,32 -4,44 0,32"/>
+      <polygon points="0,32 4,44 8,32"/>
+      <polygon points="8,32 12,44 16,32"/>
+      <!-- Bottom row (pointing up) -->
+      <polygon points="-14,44 -10,34 -6,44"/>
+      <polygon points="-6,44 -2,34 2,44"/>
+      <polygon points="2,44 6,34 10,44"/>
+      <polygon points="10,44 14,34 18,44"/>
+    </g>
+
+    <!-- Red mouth interior -->
+    <path d="M-16,32 L-14,44 L-6,44 L-8,32 Z" fill="#cc2233" opacity="0.3"/>
+    <path d="M-8,32 L-6,44 L2,44 L0,32 Z" fill="#cc2233" opacity="0.3"/>
+    <path d="M0,32 L2,44 L10,44 L8,32 Z" fill="#cc2233" opacity="0.3"/>
+    <path d="M8,32 L10,44 L18,44 L16,32 Z" fill="#cc2233" opacity="0.3"/>
+
+    <!-- Angry eye -->
+    <ellipse cx="-5" cy="22" rx="5" ry="4" fill="white"/>
+    <circle cx="-4" cy="22" r="2.5" fill="#111"/>
+    <circle cx="-3.5" cy="21.5" r="0.8" fill="white"/>
+    <!-- Angry eyebrow -->
+    <line x1="-12" y1="16" x2="-1" y2="18" stroke="#111" stroke-width="2.5" stroke-linecap="round"/>
+
+    <!-- Tail fins (top) -->
+    <g transform="translate(0,-38)">
+      <rect x="-4" y="-8" width="8" height="10" rx="1" fill="#4a5a2b" stroke="#3a4a1b" stroke-width="0.5"/>
+      <!-- Left fin -->
+      <path d="M-4,-2 L-18,-14 L-16,-2 Z" fill="#5a6a3b" stroke="#3a4a1b" stroke-width="0.5"/>
+      <!-- Right fin -->
+      <path d="M4,-2 L18,-14 L16,-2 Z" fill="#5a6a3b" stroke="#3a4a1b" stroke-width="0.5"/>
+      <!-- Center fin (up) -->
+      <path d="M-2,-8 L0,-20 L2,-8 Z" fill="#5a6a3b" stroke="#3a4a1b" stroke-width="0.5"/>
+    </g>
+
+    <!-- "DS" text on body -->
+    <text x="0" y="-6" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="white" opacity="0.9">D</text>
+    <text x="0" y="8" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="white" opacity="0.9">S</text>
+  </g>
+
+  <!-- Terminal cursor blink (bottom right) -->
+  <rect x="90" y="98" width="10" height="14" rx="1" fill="#00ff88" opacity="0.85"/>
+  <text x="92" y="110" font-family="monospace" font-weight="bold" font-size="13" fill="#1a1a2e">$</text>
+</svg>

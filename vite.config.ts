@@ -22,6 +22,12 @@ export default defineConfig({
           resolve(__dirname, "public/options.js"),
           resolve(__dirname, "dist/options.js")
         );
+        for (const size of ["16", "48", "128"]) {
+          copyFileSync(
+            resolve(__dirname, `public/icon${size}.png`),
+            resolve(__dirname, `dist/icon${size}.png`)
+          );
+        }
       },
     },
   ],
