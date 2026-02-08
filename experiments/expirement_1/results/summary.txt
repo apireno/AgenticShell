@@ -1,6 +1,0 @@
-Trial 1 | Task 1 | Tool calls: 0 | Time: 92.8s | Timed out: No
-Trial 3 | Task 1 | Tool calls: 0 | Time: 43.0s | Timed out: No
-Trial 6 | Task 2 | Tool calls: 0 | Time: 300.0s | Timed out: Yes
-Trial 8 | Task 2 | Tool calls: 0 | Time: 137.6s | Timed out: No
-Trial 9 | Task 3 | Tool calls: 0 | Time: 139.6s | Timed out: No
-Trial 11 | Task 3 | Tool calls: 0 | Time: 300.0s | Timed out: Yes

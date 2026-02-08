@@ -1,15 +1,31 @@
 #!/bin/bash
 # DOMShell Trial Runner
-# Run from your Mac terminal: cd ~/repos/DOMShell/experiment && bash run_domshell_trials.sh
+# Run from: cd ~/repos/DOMShell/experiments/expirement_1 && bash run_domshell_trials.sh
 #
 # Prerequisites:
-#   - Chrome open with DOMShell extension loaded and connected
-#   - claude CLI installed and authenticated
-#   - domshell MCP server configured in .mcp.json (in this directory) or ~/.claude/settings.json
+#   1. Chrome open with DOMShell extension loaded and connected
+#   2. MCP server already running in a separate terminal:
+#      cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token test-token-123
+#   3. claude CLI installed and authenticated
+#   4. .mcp.json in this directory uses proxy.ts → connects to running server on port 3001
 
 RESULTS_DIR="$(cd "$(dirname "$0")" && pwd)/as_results"
 mkdir -p "$RESULTS_DIR"
 TIMEOUT_SECS=300  # 5 minutes per trial
+
+# ── Quick connectivity check ────────────────────────────────────────────────
+
+echo "Checking MCP server on port 3001..."
+if ! curl -sf http://127.0.0.1:3001/mcp >/dev/null 2>&1; then
+  echo ""
+  echo "ERROR: MCP server not reachable on port 3001."
+  echo "Start it first in a separate terminal:"
+  echo "  cd ~/repos/DOMShell/mcp-server && npx tsx index.ts --allow-write --no-confirm --token test-token-123"
+  echo ""
+  exit 1
+fi
+echo "MCP server is up. Starting trials..."
+echo ""
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
