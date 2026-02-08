@@ -754,6 +754,47 @@ agent@shell:$ disconnect
 | `agentshell_whoami` | `whoami` | Sensitive |
 | `agentshell_execute` | *(any command)* | Varies |
 
+## Roadmap
+
+### Distribution & Setup
+
+- [ ] **Chrome Web Store listing** — publish to the store for one-click install
+- [ ] **GitHub release with .crx** — downloadable extension package for sideloading
+- [ ] **MCP setup wizard** — an `npx agentshell init` command (or in-extension prompt) that generates the Claude Desktop JSON config, sets a shared token, and writes it to `claude_desktop_config.json` automatically
+- [ ] **Support for other MCP clients** — Gemini Desktop, OpenAI ChatGPT desktop, Cursor, Windsurf, and other MCP-compatible hosts
+
+### New Commands
+
+- [ ] **`watch` / `cron`** — periodic re-execution of a command (e.g. `watch ls` to poll for DOM changes, `cron "5s" "text main"` to sample content)
+- [ ] **`history`** — command history with recall (`history`, `!n` to re-run)
+- [ ] **`back` / `forward`** — browser-style history navigation within the current tab
+- [ ] **`close`** — close the current tab (`close` or `close <tab-id>`)
+- [ ] **`screenshot`** — capture a screenshot of the current tab (useful for visual verification alongside AX tree inspection)
+- [ ] **`pipe` / `|`** — pipe output between commands (e.g. `find --type link | grep login`)
+- [ ] **`select <name>`** — select an option from a `<select>` dropdown by value or visible text
+- [ ] **`scroll`** — scroll the page or a specific element (`scroll down`, `scroll up`, `scroll <name>`)
+- [ ] **`wait`** — wait for a specific element to appear (e.g. `wait submit_btn` blocks until it exists in the tree)
+
+### JavaScript Layer
+
+- [ ] **`js` command** — execute arbitrary JavaScript in the tab context and return the result
+- [ ] **JS functions as executables** — expose page-level JavaScript functions as "files" in a virtual `/js/` or `/functions/` directory; `ls /js/` lists callable functions, `cat /js/fetchData` shows the signature, and running `/js/fetchData --arg1 value` executes it with arguments
+- [ ] **`eval <expr>`** — quick expression evaluation (e.g. `eval document.title`, `eval window.location.href`)
+
+### Agent Ergonomics
+
+- [ ] **`bookmark` / `alias`** — save named paths for quick navigation (e.g. `bookmark inbox ~/tabs/gmail/main/inbox_list`)
+- [ ] **Multi-tab operations** — run a command across multiple tabs (e.g. `each tab text main` to extract text from every open tab)
+- [ ] **Structured output mode** — `--json` flag on commands for machine-parseable output (e.g. `ls --json`, `cat --json`)
+- [ ] **Session persistence** — save and restore shell state (path, env vars, bookmarks) across extension reloads
+- [ ] **`diff`** — compare two AX tree snapshots to see what changed after an action
+
+### Platform
+
+- [ ] **Firefox extension** — port to Firefox using WebExtensions API + remote debugging protocol
+- [ ] **Playwright/Puppeteer backend** — alternative to Chrome extension for headless agent workflows
+- [ ] **REST API mode** — expose AgentShell commands over HTTP for non-MCP integrations
+
 ## How This Project Was Built
 
 The technical specification for AgentShell was authored by **Google Gemini**, designed as a comprehensive prompt that could be handed directly to a coding agent to scaffold and build the entire project from scratch. The full original specification is preserved in [`intitial_project_prompt.md`](intitial_project_prompt.md).
